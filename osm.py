@@ -23,11 +23,43 @@ HTML_TEMPLATE = """
   <link rel="stylesheet" href="https://unpkg.com/leaflet-draw/dist/leaflet.draw.css"/>
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <script src="https://unpkg.com/leaflet-draw/dist/leaflet.draw.js"></script>
+  <style>
+    #overlay {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: rgba(0,0,0,0.7);
+      color: white;
+      display: none;
+      justify-content: center;
+      align-items: center;
+      flex-direction: column;
+      font-size: 18px;
+      z-index: 9999;
+    }
+    .progress-bar {
+      width: 80%; height: 25px;
+      background: #444; border-radius: 8px;
+      margin-top: 15px;
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%; width: 0%;
+      background: limegreen;
+      transition: width 0.3s;
+    }
+  </style>
 </head>
 <body>
   <h3>Draw your area and click "Export"</h3>
   <div id="map" style="width: 100%; height: 600px;"></div>
   <button onclick="exportPolygon()">Export</button>
+
+  <!-- Progress overlay -->
+  <div id="overlay">
+    <div id="status">Starting export...</div>
+    <div class="progress-bar"><div class="progress-fill" id="progress"></div></div>
+  </div>
 
   <script>
     var map = L.map('map').setView([40.7128, -74.0060], 14);
@@ -49,25 +81,49 @@ HTML_TEMPLATE = """
       drawnItems.addLayer(layer);
     });
 
+    function showOverlay(text, percent) {
+      document.getElementById("overlay").style.display = "flex";
+      document.getElementById("status").innerText = text;
+      document.getElementById("progress").style.width = percent + "%";
+    }
+
+    function hideOverlay() {
+      document.getElementById("overlay").style.display = "none";
+    }
+
     function exportPolygon() {
       var data = drawnItems.toGeoJSON();
       if (data.features.length === 0) {
         alert("Draw a polygon first!");
         return;
       }
+      showOverlay("Sending polygon...", 10);
+
       fetch("/upload", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data)
-      }).then(r => {
-        if (r.ok) { alert("✅ Exported! Check exported_area.osm"); }
-        else { alert("❌ Failed. Check console."); }
+      })
+      .then(r => r.json())
+      .then(resp => {
+        if (resp.status === "ok") {
+          showOverlay("Finished! File exported_area.osm created", 100);
+          setTimeout(hideOverlay, 3000);
+        } else {
+          hideOverlay();
+          alert("❌ Failed. Check server logs.");
+        }
+      })
+      .catch(err => {
+        hideOverlay();
+        alert("❌ Error: " + err);
       });
     }
   </script>
 </body>
 </html>
 """
+
 
 # -------------------------------
 # Convert Overpy result -> OSM XML (nodes + ways only)
@@ -125,6 +181,61 @@ def split_polygon(polygon, max_size=0.25):
                 small_polygons.append(sub.intersection(polygon))
     return small_polygons
 
+def merge_results(results, output_file):
+    """
+    Merge multiple Overpy results into one OSM XML file.
+    Supports nodes, ways, and relations safely.
+    """
+    seen_nodes = set()
+    seen_ways = set()
+    seen_rels = set()
+
+    with open(output_file, "w", encoding="utf-8") as f:
+        f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
+        f.write('<osm version="0.6" generator="overpy">\n')
+
+        for result in results:
+            # Nodes
+            for node in result.nodes:
+                if node.id in seen_nodes:
+                    continue
+                seen_nodes.add(node.id)
+                f.write(f'  <node id="{node.id}" lat="{node.lat}" lon="{node.lon}">\n')
+                for k, v in node.tags.items():
+                    f.write(f'    <tag k="{html.escape(str(k))}" v="{html.escape(str(v))}"/>\n')
+                f.write('  </node>\n')
+
+            # Ways
+            for way in result.ways:
+                if way.id in seen_ways:
+                    continue
+                seen_ways.add(way.id)
+                f.write(f'  <way id="{way.id}">\n')
+                for n in way.nodes:
+                    f.write(f'    <nd ref="{n.id}"/>\n')
+                for k, v in way.tags.items():
+                    f.write(f'    <tag k="{html.escape(str(k))}" v="{html.escape(str(v))}"/>\n')
+                f.write('  </way>\n')
+
+            # Relations
+            for rel in result.relations:
+                if rel.id in seen_rels:
+                    continue
+                seen_rels.add(rel.id)
+                f.write(f'  <relation id="{rel.id}">\n')
+                for m in rel.members:
+                    if isinstance(m, overpy.RelationNode):
+                        f.write(f'    <member type="node" ref="{m.ref}" role="{m.role}"/>\n')
+                    elif isinstance(m, overpy.RelationWay):
+                        f.write(f'    <member type="way" ref="{m.ref}" role="{m.role}"/>\n')
+                    elif isinstance(m, overpy.RelationRelation):
+                        f.write(f'    <member type="relation" ref="{m.ref}" role="{m.role}"/>\n')
+                for k, v in rel.tags.items():
+                    f.write(f'    <tag k="{html.escape(str(k))}" v="{html.escape(str(v))}"/>\n')
+                f.write('  </relation>\n')
+
+        f.write('</osm>\n')
+
 
 @app.route("/")
 def index():
@@ -142,40 +253,34 @@ def upload():
 
     # Split if too large
     polygons = split_polygon(polygon)
+    total_parts = len(polygons)
+    print(f"🔎 Splitting polygon into {total_parts} sub-areas...")
 
     api = overpy.Overpass()
-    merged = []
+    results = []
 
-    for poly in polygons:
+    for idx, poly in enumerate(polygons, start=1):
         coords = " ".join(f"{y} {x}" for x, y in poly.exterior.coords)
         query = f"""
         [out:xml][timeout:300];
         (
           node(poly:"{coords}");
           way(poly:"{coords}");
+          relation(poly:"{coords}");
         );
         out body;
         >;
         out skel qt;
         """
-        print("🔎 Querying Overpass for sub-area...")
-        result = api.query(query)
-        merged.append(result_to_osm(result))
+        print(f"🔎 Querying Overpass for sub-area {idx}/{total_parts}...")
+        res = api.query(query)
+        results.append(res)
 
-    
-    final_xml = ['<?xml version="1.0" encoding="UTF-8"?>', '<osm version="0.6" generator="overpy">']
-    for block in merged:
-        
-        for line in block.splitlines():
-            if not line.startswith("<?xml") and not line.startswith("<osm") and not line.startswith("</osm>"):
-                final_xml.append(line)
-    final_xml.append("</osm>")
+    # Merge everything into one file
+    merge_results(results, "exported_area.osm")
 
-    with open("exported_area.osm", "w", encoding="utf-8") as f:
-        f.write("\n".join(final_xml))
+    return {"status": "ok", "parts": total_parts}
 
-    print("✅ Exported full area to exported_area.osm")
-    return {"status": "ok"}
 
 # -------------------------------
 # Run Flask App
