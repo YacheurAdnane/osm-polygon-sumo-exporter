@@ -44,6 +44,10 @@ python osm.py
 ```bash
 netconvert --osm-files exported_area.osm -o itineraire.net.xml
 ```
+6- SUMO network to XODR :
+```bash
+netconvert --sumo-net-file your_network.net.xml --opendrive-output your_network.xodr
+```
 ## Notes
 
 -The script automatically escapes XML special characters (<, >, &, ") to prevent netconvert errors.
@@ -51,5 +55,6 @@ netconvert --osm-files exported_area.osm -o itineraire.net.xml
 -Large areas are split into smaller queries for Overpass API and merged seamlessly.
 
 -Ensure netconvert is installed and in your system path if you want automatic SUMO network generation.
+
 
 
