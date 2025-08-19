@@ -32,7 +32,7 @@ pip install flask overpy shapely geopandas
 
 1- Run the Flask app:
 ```bash
-pip install flask overpy shapely geopandas
+python osm.py
 ```
 2- Open the generated map in your browser (usually at http://127.0.0.1:5000).
 
@@ -51,4 +51,5 @@ netconvert --osm-files exported_area.osm -o itineraire.net.xml
 -Large areas are split into smaller queries for Overpass API and merged seamlessly.
 
 -Ensure netconvert is installed and in your system path if you want automatic SUMO network generation.
+
 
