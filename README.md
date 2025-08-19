@@ -27,3 +27,28 @@ Install Python dependencies via pip:
 
 ```bash
 pip install flask overpy shapely geopandas
+```
+## Usage
+
+1- Run the Flask app:
+```bash
+pip install flask overpy shapely geopandas
+```
+2- Open the generated map in your browser (usually at http://127.0.0.1:5000).
+
+3- Draw a polygon over the area you want to export.
+
+4 -Click Export — this will save the polygon as selected_area.geojson and produce an OSM file (exported_area.osm).
+
+5 -Optional: Convert the OSM file to SUMO network:
+```bash
+netconvert --osm-files exported_area.osm -o itineraire.net.xml
+```
+## Notes
+
+-The script automatically escapes XML special characters (<, >, &, ") to prevent netconvert errors.
+
+-Large areas are split into smaller queries for Overpass API and merged seamlessly.
+
+-Ensure netconvert is installed and in your system path if you want automatic SUMO network generation.
+
