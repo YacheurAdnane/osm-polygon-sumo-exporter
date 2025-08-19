@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Generated files
+selected_area.geojson
+exported_area.osm
+itineraire.net.xml
