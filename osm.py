@@ -7,6 +7,7 @@ from shapely.geometry import shape, box
 import overpy
 from flask import Flask, render_template_string, request
 import html
+import time
 
 app = Flask(__name__)
 
@@ -55,7 +56,6 @@ HTML_TEMPLATE = """
   <div id="map" style="width: 100%; height: 600px;"></div>
   <button onclick="exportPolygon()">Export</button>
 
-  <!-- Progress overlay -->
   <div id="overlay">
     <div id="status">Starting export...</div>
     <div class="progress-bar"><div class="progress-fill" id="progress"></div></div>
@@ -248,6 +248,7 @@ def upload():
         json.dump(data, f)
     print("✅ Polygon saved as selected_area.geojson")
 
+    # Get the polygon and bounds
     polygon = shape(data["features"][0]["geometry"])
     print("Polygon bounds:", polygon.bounds)
 
@@ -260,21 +261,34 @@ def upload():
     results = []
 
     for idx, poly in enumerate(polygons, start=1):
-        coords = " ".join(f"{y} {x}" for x, y in poly.exterior.coords)
+        # Use bbox filter instead of poly for better performance
+        minx, miny, maxx, maxy = poly.bounds
         query = f"""
         [out:xml][timeout:300];
         (
-          node(poly:"{coords}");
-          way(poly:"{coords}");
-          relation(poly:"{coords}");
+          node({miny},{minx},{maxy},{maxx});
+          way({miny},{minx},{maxy},{maxx});
+          relation({miny},{minx},{maxy},{maxx});
         );
         out body;
         >;
         out skel qt;
         """
         print(f"🔎 Querying Overpass for sub-area {idx}/{total_parts}...")
-        res = api.query(query)
-        results.append(res)
+        try:
+            res = api.query(query)
+            results.append(res)
+        except Exception as e:
+            print(f"⚠️ Error querying Overpass for part {idx}: {e}")
+            # Consider adding a retry mechanism here with a delay
+            time.sleep(5)  # Wait for 5 seconds before retrying
+            try:
+                res = api.query(query)
+                results.append(res)
+            except Exception as retry_e:
+                print(f"❌ Failed to query part {idx} after retry: {retry_e}")
+                # You can choose to skip or raise an error here
+                pass
 
     # Merge everything into one file
     merge_results(results, "exported_area.osm")
